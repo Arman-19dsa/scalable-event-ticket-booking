@@ -1,0 +1,41 @@
+name: ticket-booking
+
+services:
+  redis:
+    image: redis:7-alpine
+
+  inventory-service:
+    build: ./inventory-service
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+
+  booking-service:
+    build: ./booking-service
+    environment:
+      REDIS_URL: redis://redis:6379
+      INVENTORY_URL: http://inventory-service:3002
+    depends_on:
+      - redis
+      - inventory-service
+
+  notification-service:
+    build: ./notification-service
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+
+  gateway:
+    build: ./gateway
+    environment:
+      BOOKING_URL: http://booking-service:3001
+      INVENTORY_URL: http://inventory-service:3002
+      NOTIFICATION_URL: http://notification-service:3003
+    ports:
+      - "3000:3000"
+    depends_on:
+      - booking-service
+      - inventory-service
+      - notification-service

@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket booking on Kubernetes</title>
+<style>
+  :root {
+    --paper: #F2F0F6;
+    --card: #FFFFFF;
+    --ink: #1B1F3B;
+    --ink-2: #2C3366;
+    --muted: #5A5E7C;
+    --line: #DAD7E4;
+    --velvet: #8E2B4A;
+    --brass: #B8892B;
+    --good: #1F7A6B;
+    --wait: #8A5A00;
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+    --sans: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); }
+  body {
+    margin: 0; color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5;
+    background: var(--paper); font-variant-numeric: tabular-nums;
+  }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 3px solid var(--brass); outline-offset: 2px; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 24px 56px; }
+
+  header { display: flex; flex-wrap: wrap; gap: 20px 40px; align-items: flex-end; justify-content: space-between; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+  h1 { font-family: var(--serif); font-weight: 700; font-size: 40px; line-height: 1.1; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { margin: 0; color: var(--muted); max-width: 52ch; }
+  .health { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); font-size: 13px; }
+  .chip i { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .chip.up i { background: var(--good); }
+  .chip.down { border-color: var(--velvet); color: var(--velvet); }
+  .chip.down i { background: var(--velvet); }
+  .chip b { font-weight: 600; }
+  .chip small { color: var(--muted); font-size: 12px; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 44px; margin-top: 30px; align-items: start; }
+
+  h2 { font-family: var(--serif); font-size: 22px; margin: 0 0 4px; }
+  .hint { margin: 0 0 16px; color: var(--muted); font-size: 14px; max-width: 60ch; }
+
+  /* Seat map */
+  .hall { background: var(--card); border-radius: 22px; padding: 22px 26px 26px; box-shadow: 0 1px 0 var(--line), 0 18px 40px -28px rgba(27,31,59,.5); }
+  .stage { height: 46px; margin: 0 auto 26px; width: 78%; background: linear-gradient(180deg, var(--ink-2), var(--ink)); color: #E9E7F5; border-radius: 6px 6px 50% 50% / 6px 6px 100% 100%; display: grid; place-items: center; font-family: var(--serif); font-size: 15px; letter-spacing: .08em; }
+  .seats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; max-width: 470px; margin: 0 auto; }
+  .seat {
+    height: 66px; border: 2px solid var(--ink); border-radius: 15px 15px 6px 6px; background: var(--card);
+    font-family: var(--serif); font-size: 21px; font-weight: 700; cursor: pointer;
+    box-shadow: inset 0 -8px 0 rgba(27,31,59,.08); transition: transform .12s, background-color .25s, border-color .25s, color .25s;
+    position: relative;
+  }
+  .seat:hover { border-color: var(--brass); }
+  .seat:active { transform: translateY(2px); }
+  .seat.selected { background: var(--ink); color: #fff; }
+  .seat.taken { background: var(--velvet); border-color: var(--velvet); color: #fff; box-shadow: inset 0 -8px 0 rgba(0,0,0,.18); }
+  .seat.taken::after { content: "booked"; position: absolute; left: 0; right: 0; bottom: 5px; font: 600 10px/1 var(--sans); letter-spacing: .02em; opacity: .85; }
+  .seat.pending { opacity: .55; }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; justify-content: center; margin-top: 20px; font-size: 13px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend i { width: 16px; height: 14px; border-radius: 6px 6px 3px 3px; border: 2px solid var(--ink); background: var(--card); }
+  .legend .l-sel i { background: var(--ink); }
+  .legend .l-tak i { background: var(--velvet); border-color: var(--velvet); }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .btn { padding: 11px 18px; border-radius: 10px; border: 2px solid var(--ink); background: var(--card); font-weight: 600; cursor: pointer; transition: background-color .15s, color .15s; }
+  .btn:hover:not(:disabled) { background: var(--ink); color: #fff; }
+  .btn.primary { background: var(--ink); color: #fff; }
+  .btn.primary:hover:not(:disabled) { background: var(--ink-2); border-color: var(--ink-2); }
+  .btn.quiet { border-color: var(--line); color: var(--muted); font-weight: 500; }
+  .btn.quiet:hover:not(:disabled) { background: var(--paper); color: var(--ink); }
+  .btn.danger-armed { border-color: var(--velvet); background: var(--velvet); color: #fff; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  .note { margin-top: 16px; min-height: 48px; padding: 12px 14px; border-left: 4px solid var(--line); background: rgba(255,255,255,.7); border-radius: 0 10px 10px 0; font-size: 14px; }
+  .note.ok { border-color: var(--good); }
+  .note.no { border-color: var(--velvet); }
+  .note.info { border-color: var(--brass); }
+
+  /* Right column */
+  .side section + section { margin-top: 34px; }
+  .pods { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .pod { display: grid; grid-template-columns: 74px 1fr 40px; gap: 12px; align-items: center; font-size: 14px; }
+  .pod code { font-family: var(--mono); font-size: 13px; }
+  .bar { height: 14px; background: #E4E1EE; border-radius: 7px; overflow: hidden; }
+  .bar span { display: block; height: 100%; border-radius: 7px; transition: width .35s; }
+  .pod output { text-align: right; font-weight: 600; }
+  .empty { color: var(--muted); font-size: 14px; margin: 0; padding: 14px 0; }
+  .pods-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .link { background: none; border: 0; color: var(--muted); text-decoration: underline; cursor: pointer; padding: 4px 0; font-size: 13px; }
+
+  .stubs { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; max-height: 330px; overflow: auto; padding-right: 4px; }
+  .stub { display: grid; grid-template-columns: 76px 1fr; background: var(--card); border-radius: 12px; position: relative; box-shadow: 0 1px 0 var(--line); }
+  .stub-seat { display: grid; place-items: center; padding: 10px 6px; border-right: 2px dashed var(--line); text-align: center; }
+  .stub-seat small { display: block; font-size: 11px; color: var(--muted); }
+  .stub-seat b { font-family: var(--serif); font-size: 26px; line-height: 1.1; }
+  .stub::before, .stub::after { content: ""; position: absolute; left: 66px; width: 20px; height: 10px; background: var(--paper); }
+  .stub::before { top: -1px; border-radius: 0 0 10px 10px; }
+  .stub::after { bottom: -1px; border-radius: 10px 10px 0 0; }
+  .stub-body { padding: 10px 14px; }
+  .stub-body p { margin: 0; font-weight: 600; }
+  .stub-body small { color: var(--muted); font-size: 13px; }
+  .stub.fresh { animation: arrive .9s ease-out; }
+  @keyframes arrive { from { background: #F6E7B8; transform: translateX(10px); } to { background: var(--card); transform: none; } }
+
+  /* Ledger */
+  .ledger { margin-top: 44px; }
+  .scroll { max-height: 340px; overflow: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { position: sticky; top: 0; background: var(--card); text-align: left; font-weight: 600; font-size: 13px; color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 14px; border-bottom: 1px solid #EEECF4; }
+  td.num, th.num { text-align: right; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 13px; border: 1px solid currentColor; }
+  .badge.ok { color: var(--good); }
+  .badge.no { color: var(--velvet); }
+  .badge.wait { color: var(--wait); }
+  .badge.err { color: #fff; background: var(--velvet); border-color: var(--velvet); }
+  .podtag { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 13px; }
+  .podtag i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; gap: 36px; }
+    h1 { font-size: 32px; }
+    .seat { height: 58px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Book a seat</h1>
+      <p class="sub">A booking system split into separate services that run as pods on Kubernetes. Every click below travels through the gateway, the booking pods and the inventory service.</p>
+    </div>
+    <div class="health" id="health" role="status" aria-label="Service health"></div>
+  </header>
+
+  <div class="layout">
+    <main>
+      <h2>Hall A, 20 seats</h2>
+      <p class="hint">Click a free seat to book it. Click a booked seat to watch the system refuse a second booking.</p>
+
+      <div class="hall">
+        <div class="stage" aria-hidden="true">Stage</div>
+        <div class="seats" id="seats"></div>
+        <div class="legend">
+          <span><i></i>Free</span>
+          <span class="l-sel"><i></i>Selected</span>
+          <span class="l-tak"><i></i>Booked</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="bookBtn" type="button" disabled>Book selected seat</button>
+        <button class="btn" id="raceBtn" type="button">Race 10 requests for one seat</button>
+        <button class="btn" id="burstBtn" type="button">Send 40 requests</button>
+        <button class="btn quiet" id="resetBtn" type="button">Clear all bookings</button>
+      </div>
+      <div class="note info" id="note" role="status" aria-live="polite">Pick a seat to start. The race button fires 10 bookings for the same seat at the same moment, and the lock lets exactly one through.</div>
+    </main>
+
+    <aside class="side">
+      <section aria-labelledby="podsTitle">
+        <div class="pods-head">
+          <h2 id="podsTitle">Which pod answered</h2>
+          <button class="link" id="clearPods" type="button">Clear counts</button>
+        </div>
+        <p class="hint">Each booking request is answered by one of the booking pods. Scale the deployment and new pods appear here.</p>
+        <ul class="pods" id="pods"><li class="empty">No requests yet.</li></ul>
+      </section>
+
+      <section aria-labelledby="stubTitle">
+        <h2 id="stubTitle">Confirmations</h2>
+        <p class="hint">Sent by the notification service after each booking, through a message channel. The booking pod never calls it directly.</p>
+        <ul class="stubs" id="stubs"><li class="empty">No confirmations yet.</li></ul>
+      </section>
+    </aside>
+  </div>
+
+  <section class="ledger" aria-labelledby="ledgerTitle">
+    <h2 id="ledgerTitle">Request log</h2>
+    <p class="hint">The clock columns are Lamport logical clocks. Each service raises its own clock and passes it along with every request, so the order of events stays consistent across services.</p>
+    <div class="scroll" tabindex="0" role="region" aria-label="Request log">
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Seat</th><th>Result</th><th>Served by</th><th class="num">Booking clock</th><th class="num">Gateway clock</th><th class="num">Round trip</th></tr>
+        </thead>
+        <tbody id="log"><tr><td colspan="7" class="empty">Requests will appear here.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  const $ = (s) => document.querySelector(s);
+  const COLORS = ['#1F7A6B', '#8E2B4A', '#B8892B', '#3B5BA9', '#7A4EA3', '#B5541B', '#2B7A99', '#5C7A1F'];
+  const state = { total: 20, booked: new Set(), selected: null, busy: false, pods: new Map(), podColor: new Map(), seenNotes: null, pending: new Set() };
+
+  async function api(path, method) {
+    const t0 = performance.now();
+    try {
+      const r = await fetch(path, { method: method || 'GET' });
+      let data = {};
+      try { data = await r.json(); } catch (e) { /* non-JSON body */ }
+      return { status: r.status, ok: r.ok, data, ms: Math.round(performance.now() - t0) };
+    } catch (e) {
+      return { status: 0, ok: false, data: { error: 'unreachable' }, ms: Math.round(performance.now() - t0) };
+    }
+  }
+
+  function shortPod(name) {
+    if (!name) return 'unknown';
+    const m = String(name).match(/^[a-z-]+?-[a-z0-9]{6,10}-([a-z0-9]{5})$/);
+    return m ? m[1] : String(name).slice(0, 8);
+  }
+  function colorFor(pod) {
+    if (!state.podColor.has(pod)) state.podColor.set(pod, COLORS[state.podColor.size % COLORS.length]);
+    return state.podColor.get(pod);
+  }
+  function outcome(r) {
+    switch (r.status) {
+      case 200: return { t: 'Booked', c: 'ok' };
+      case 409: return { t: 'Already taken', c: 'no' };
+      case 423: return { t: 'Locked by another request', c: 'wait' };
+      case 400: return { t: 'Invalid seat', c: 'no' };
+      case 502: case 503: return { t: 'Service unavailable', c: 'err' };
+      case 0: return { t: 'Gateway unreachable', c: 'err' };
+      default: return { t: 'Error ' + r.status, c: 'err' };
+    }
+  }
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function say(msg, kind) {
+    const n = $('#note');
+    n.textContent = msg;
+    n.className = 'note ' + (kind || 'info');
+  }
+
+  /* ---------- Seats ---------- */
+  function renderSeats() {
+    const box = $('#seats');
+    box.textContent = '';
+    for (let i = 1; i <= state.total; i++) {
+      const taken = state.booked.has(i);
+      const b = el('button', 'seat' + (taken ? ' taken' : '') + (state.selected === i ? ' selected' : '') + (state.pending.has(i) ? ' pending' : ''), String(i));
+      b.type = 'button';
+      b.setAttribute('aria-label', 'Seat ' + i + (taken ? ', booked. Activate to try booking it again.' : ', free'));
+      b.setAttribute('aria-pressed', state.selected === i ? 'true' : 'false');
+      b.addEventListener('click', () => onSeat(i, taken));
+      box.appendChild(b);
+    }
+    $('#bookBtn').disabled = state.busy || state.selected === null;
+    $('#bookBtn').textContent = state.selected === null ? 'Book selected seat' : 'Book seat ' + state.selected;
+  }
+  function onSeat(i, taken) {
+    if (state.busy) return;
+    if (taken) { bookOne(i); return; }
+    state.selected = state.selected === i ? null : i;
+    renderSeats();
+  }
+
+  /* ---------- Log and counters ---------- */
+  function addLog(seat, r) {
+    const body = $('#log');
+    if (body.querySelector('.empty')) body.textContent = '';
+    const o = outcome(r);
+    const tr = document.createElement('tr');
+    tr.appendChild(el('td', '', new Date().toLocaleTimeString()));
+    tr.appendChild(el('td', '', String(seat)));
+    const tdR = el('td'); tdR.appendChild(el('span', 'badge ' + o.c, o.t)); tr.appendChild(tdR);
+    const tdP = el('td');
+    if (r.data.instance) {
+      const tag = el('span', 'podtag'); const sw = el('i'); sw.style.background = colorFor(shortPod(r.data.instance));
+      tag.appendChild(sw); tag.appendChild(document.createTextNode(shortPod(r.data.instance)));
+      tag.title = r.data.instance; tdP.appendChild(tag);
+    } else { tdP.textContent = 'none'; }
+    tr.appendChild(tdP);
+    tr.appendChild(el('td', 'num', r.data.lamport !== undefined ? String(r.data.lamport) : '-'));
+    tr.appendChild(el('td', 'num', r.data.gatewayLamport !== undefined ? String(r.data.gatewayLamport) : '-'));
+    tr.appendChild(el('td', 'num', r.ms + ' ms'));
+    body.insertBefore(tr, body.firstChild);
+    while (body.children.length > 60) body.removeChild(body.lastChild);
+  }
+  function tally(r) {
+    if (!r.data.instance) return;
+    const p = shortPod(r.data.instance);
+    state.pods.set(p, (state.pods.get(p) || 0) + 1);
+  }
+  function renderPods() {
+    const ul = $('#pods');
+    ul.textContent = '';
+    if (state.pods.size === 0) { ul.appendChild(el('li', 'empty', 'No requests yet.')); return; }
+    const max = Math.max(...state.pods.values());
+    [...state.pods.entries()].sort((a, b) => b[1] - a[1]).forEach(([pod, n]) => {
+      const li = el('li', 'pod');
+      li.appendChild(el('code', '', pod));
+      const bar = el('div', 'bar'); const fill = el('span'); fill.style.width = Math.max(4, (n / max) * 100) + '%'; fill.style.background = colorFor(pod);
+      bar.appendChild(fill); li.appendChild(bar);
+      li.appendChild(el('output', '', String(n)));
+      ul.appendChild(li);
+    });
+  }
+
+  /* ---------- Actions ---------- */
+  function setBusy(v) {
+    state.busy = v;
+    ['#raceBtn', '#burstBtn', '#resetBtn'].forEach((s) => { $(s).disabled = v; });
+    $('#bookBtn').disabled = v || state.selected === null;
+  }
+  function firstFree() {
+    for (let i = 1; i <= state.total; i++) if (!state.booked.has(i)) return i;
+    return null;
+  }
+  async function bookOne(seat) {
+    setBusy(true); state.pending.add(seat); renderSeats();
+    const r = await api('/api/book/' + seat, 'POST');
+    state.pending.delete(seat);
+    addLog(seat, r); tally(r); renderPods();
+    const o = outcome(r);
+    if (r.status === 200) { state.selected = null; say('Seat ' + seat + ' booked by pod ' + shortPod(r.data.instance) + '. A confirmation is on its way.', 'ok'); }
+    else if (r.status === 409) say('Seat ' + seat + ' is already booked. The inventory service refused the second booking.', 'no');
+    else say(o.t + '.', 'no');
+    await pollSeats(); setBusy(false); renderSeats();
+  }
+  async function race() {
+    const seat = (state.selected !== null && !state.booked.has(state.selected)) ? state.selected : firstFree();
+    if (seat === null) { say('Every seat is booked. Clear all bookings first.', 'no'); return; }
+    const N = 10;
+    setBusy(true); say('Sending ' + N + ' bookings for seat ' + seat + ' at the same moment...', 'info');
+    const results = await Promise.all(Array.from({ length: N }, () => api('/api/book/' + seat, 'POST')));
+    results.forEach((r) => { addLog(seat, r); tally(r); });
+    renderPods();
+    const c = { booked: 0, locked: 0, taken: 0, other: 0 };
+    results.forEach((r) => { if (r.status === 200) c.booked++; else if (r.status === 423) c.locked++; else if (r.status === 409) c.taken++; else c.other++; });
+    const rest = [];
+    if (c.locked) rest.push(c.locked + ' stopped by the lock');
+    if (c.taken) rest.push(c.taken + ' refused as already booked');
+    if (c.other) rest.push(c.other + ' failed');
+    say('Seat ' + seat + ': ' + c.booked + ' booked, ' + (rest.length ? rest.join(', ') : 'none turned away') + '. Only one booking exists for the seat.', c.booked === 1 && !c.other ? 'ok' : 'no');
+    state.selected = null;
+    await pollSeats(); setBusy(false); renderSeats();
+  }
+  async function burst() {
+    const bookedSeat = [...state.booked][0];
+    const seat = bookedSeat !== undefined ? bookedSeat : firstFree();
+    if (seat === null) { say('Every seat is booked. Clear all bookings first.', 'no'); return; }
+    const N = 40;
+    setBusy(true); say('Sending ' + N + ' requests at once...', 'info');
+    const t0 = performance.now();
+    const results = await Promise.all(Array.from({ length: N }, () => api('/api/book/' + seat, 'POST')));
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    results.forEach((r) => tally(r));
+    renderPods();
+    const used = new Set(results.filter((r) => r.data.instance).map((r) => shortPod(r.data.instance))).size;
+    const failed = results.filter((r) => r.status === 0 || r.status >= 500).length;
+    say(N + ' requests finished in ' + secs + ' s and were shared by ' + used + ' booking pod' + (used === 1 ? '' : 's') + (failed ? ', ' + failed + ' failed' : '') + '. Scale the deployment and run it again to compare.', failed ? 'no' : 'ok');
+    await pollSeats(); setBusy(false); renderSeats();
+  }
+  let armed = false, armTimer = null;
+  function disarm() { armed = false; clearTimeout(armTimer); $('#resetBtn').className = 'btn quiet'; $('#resetBtn').textContent = 'Clear all bookings'; }
+  async function reset() {
+    if (!armed) {
+      armed = true; $('#resetBtn').className = 'btn danger-armed'; $('#resetBtn').textContent = 'Click again to clear all bookings';
+      armTimer = setTimeout(disarm, 3500); return;
+    }
+    disarm(); setBusy(true);
+    const r = await api('/api/reset', 'POST');
+    if (r.ok) { state.selected = null; state.seenNotes = new Set(); say('All bookings and confirmations cleared.', 'ok'); }
+    else say('Could not clear bookings. Rebuild the inventory service with the reset endpoint.', 'no');
+    await pollSeats(); setBusy(false); renderSeats();
+  }
+
+  /* ---------- Polling ---------- */
+  function renderNotes(list) {
+    const ul = $('#stubs');
+    if (!list.length) { ul.textContent = ''; ul.appendChild(el('li', 'empty', 'No confirmations yet.')); state.seenNotes = state.seenNotes || new Set(); return; }
+    const first = state.seenNotes === null;
+    if (first) state.seenNotes = new Set();
+    ul.textContent = '';
+    list.forEach((n) => {
+      const key = n.time + '|' + n.text;
+      const m = String(n.text).match(/seat (\d+)/i);
+      const li = el('li', 'stub' + (!first && !state.seenNotes.has(key) ? ' fresh' : ''));
+      state.seenNotes.add(key);
+      const left = el('div', 'stub-seat'); const wrap = el('div');
+      wrap.appendChild(el('small', '', 'Seat')); wrap.appendChild(el('b', '', m ? m[1] : '?')); left.appendChild(wrap);
+      const right = el('div', 'stub-body');
+      right.appendChild(el('p', '', 'Confirmation sent'));
+      right.appendChild(el('small', '', 'Booked through pod ' + shortPod(n.from) + ' at ' + new Date(n.time).toLocaleTimeString() + '. Clock ' + n.eventLamport + ' at booking, ' + n.notifiedLamport + ' when notified.'));
+      li.appendChild(left); li.appendChild(right); ul.appendChild(li);
+    });
+  }
+  async function pollSeats() {
+    const [s, n] = await Promise.all([api('/api/seats'), api('/api/notifications')]);
+    if (s.ok && Array.isArray(s.data.booked)) {
+      state.booked = new Set(s.data.booked.map(Number));
+      state.total = s.data.total || 20;
+      if (state.selected !== null && state.booked.has(state.selected)) state.selected = null;
+      if (!state.busy) renderSeats();
+    } else if (!state.busy) {
+      say('Cannot read seats from the gateway. Check that the gateway and inventory pods are running.', 'no');
+    }
+    if (n.ok && Array.isArray(n.data.notifications)) renderNotes(n.data.notifications);
+  }
+  async function pollHealth() {
+    const r = await api('/api/health');
+    const box = $('#health');
+    box.textContent = '';
+    const defs = [['gateway', 'Gateway'], ['booking', 'Booking'], ['inventory', 'Inventory'], ['notification', 'Notification']];
+    defs.forEach(([key, label]) => {
+      const d = r.ok ? r.data[key] : null;
+      const up = d && d.status === 'ok';
+      const chip = el('span', 'chip ' + (up ? 'up' : 'down'));
+      chip.appendChild(el('i'));
+      chip.appendChild(el('b', '', label));
+      let extra = up ? 'up' : 'down';
+      if (up && d.instance && key === 'booking') extra = 'pod ' + shortPod(d.instance);
+      chip.appendChild(el('small', '', extra));
+      box.appendChild(chip);
+    });
+  }
+  function loop(fn, ms) {
+    const tick = async () => { if (!document.hidden) { try { await fn(); } catch (e) { /* keep polling */ } } setTimeout(tick, ms); };
+    tick();
+  }
+
+  $('#bookBtn').addEventListener('click', () => { if (state.selected !== null) bookOne(state.selected); });
+  $('#raceBtn').addEventListener('click', race);
+  $('#burstBtn').addEventListener('click', burst);
+  $('#resetBtn').addEventListener('click', reset);
+  $('#clearPods').addEventListener('click', () => { state.pods.clear(); renderPods(); });
+
+  renderSeats(); renderPods();
+  loop(pollSeats, 2000);
+  loop(pollHealth, 4000);
+})();
+</script>
+</body>
+</html>
